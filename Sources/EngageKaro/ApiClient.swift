@@ -41,9 +41,14 @@ public struct EngageKaroApiError: Error, LocalizedError {
 enum ApiClient {
     static var identityHash: String?
 
-    static func identify(config: EngageKaroConfig, externalId: String?) async throws {
+    static func identify(
+        config: EngageKaroConfig,
+        externalId: String?,
+        deviceContext: [String: Any]? = nil
+    ) async throws {
         var body: [String: Any] = [:]
         if let externalId { body["externalId"] = externalId }
+        deviceContext?.forEach { body[$0.key] = $0.value }
         try await post(config: config, path: "/users", body: body)
     }
 

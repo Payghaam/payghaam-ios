@@ -20,6 +20,8 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     private var consentGiven = true
     private var pendingPushToken: String?
     private var currentToken: String?
+    private let sessions = SessionTracker()
+    private var foregroundObserver: NSObjectProtocol?
 
     public var isInitialized: Bool { config != nil }
 
@@ -38,17 +40,58 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
         self.config = config
         consentGiven = !config.requireConsent
         UNUserNotificationCenter.current().delegate = self
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.onForeground() }
+        }
+        Task { await onForeground() }
+    }
+
+    private func pushPermissionLabel() async -> String? {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral: return "granted"
+        case .denied: return "denied"
+        default: return "unknown"
+        }
+    }
+
+    private func pingDeviceContext(sessionStart: Bool = false) async {
+        guard canSend, let config, externalId != nil else { return }
+        do {
+            let countSession = sessionStart && sessions.noteForeground()
+            let permission = await pushPermissionLabel()
+            try await ApiClient.identify(
+                config: config,
+                externalId: externalId,
+                deviceContext: DeviceContext.collect(sessionStart: countSession, pushPermission: permission)
+            )
+        } catch {
+            // Best-effort device profile sync.
+        }
+    }
+
+    private func runPostLoginTasks() async {
+        guard canSend else { return }
+        if let token = pendingPushToken ?? currentToken {
+            try? await registerPushToken(token)
+        }
+        await pingDeviceContext(sessionStart: true)
+    }
+
+    public func onForeground() async {
+        try? await pingDeviceContext(sessionStart: true)
     }
 
     public func login(externalId: String, identityHash: String? = nil) async throws {
         self.externalId = externalId
         ApiClient.identityHash = identityHash
         UserDefaults.standard.set(externalId, forKey: "engagekaro_external_id")
-        guard canSend, let config else { return }
-        try await ApiClient.identify(config: config, externalId: externalId)
-        if let token = pendingPushToken ?? currentToken {
-            try await registerPushToken(token)
-        }
+        guard canSend else { return }
+        Task { await runPostLoginTasks() }
     }
 
     public func logout() {
