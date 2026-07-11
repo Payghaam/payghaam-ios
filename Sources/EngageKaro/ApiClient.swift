@@ -93,12 +93,39 @@ enum ApiClient {
         try await post(config: config, path: "/receipts", body: body)
     }
 
+    // Fire-and-forget path: send now, or park in the offline queue on a
+    // retryable failure so offline activity isn't lost.
     private static func post(config: EngageKaroConfig, path: String, body: [String: Any]) async throws {
-        try await request(config: config, method: "POST", path: path, body: body)
+        try await sendOrQueue(config: config, method: "POST", path: path, body: body)
     }
 
     private static func put(config: EngageKaroConfig, path: String, body: [String: Any]) async throws {
-        try await request(config: config, method: "PUT", path: path, body: body)
+        try await sendOrQueue(config: config, method: "PUT", path: path, body: body)
+    }
+
+    private static func sendOrQueue(
+        config: EngageKaroConfig,
+        method: String,
+        path: String,
+        body: [String: Any]
+    ) async throws {
+        do {
+            try await request(config: config, method: method, path: path, body: body)
+            await OfflineQueue.flush(config: config)
+        } catch {
+            guard OfflineQueue.isRetryable(error) else { throw error }
+            OfflineQueue.enqueue(method: method, path: path, body: body)
+        }
+    }
+
+    /// Direct request without queueing — used by OfflineQueue's drain.
+    static func rawRequest(
+        config: EngageKaroConfig,
+        method: String,
+        path: String,
+        body: [String: Any]
+    ) async throws {
+        try await request(config: config, method: method, path: path, body: body)
     }
 
     private static func request(

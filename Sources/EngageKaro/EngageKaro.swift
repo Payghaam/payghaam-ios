@@ -84,6 +84,8 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
 
     public func onForeground() async {
         try? await pingDeviceContext(sessionStart: true)
+        // Drain anything queued while the device was offline.
+        if let config { await OfflineQueue.flush(config: config) }
     }
 
     public func login(externalId: String, identityHash: String? = nil) async throws {
