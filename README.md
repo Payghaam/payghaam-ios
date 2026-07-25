@@ -60,11 +60,37 @@ func application(_ application: UIApplication,
 }
 ```
 
+## Handling taps and deep links
+
+A campaign's **Deep link URL** arrives as `ek_url`, and anything you pass as `data`
+on `POST /api/notifications` arrives alongside it:
+
+```swift
+EngageKaro.shared.onNotificationOpened = { payload in
+    // payload["ek_url"]   → "myapp://offers/summer"
+    // payload["targetId"] → your own data key
+    if let target = payload["targetId"] as? String { router.openOffer(target) }
+}
+```
+
+If you set **no** handler, the SDK opens `ek_url` itself via `UIApplication.open`.
+Setting one suppresses that, so routing — including the deep link — is yours.
+
+A tap that cold-launches the app is buffered and replayed when you assign the handler,
+so it is never dropped.
+
+The SDK installs itself as `UNUserNotificationCenter.delegate` during `initialize`, but
+keeps and forwards to whatever delegate you had set — your own notification handling
+keeps working.
+
+Reserved payload keys: `ek_message_id`, `ek_url`, `ek_image`.
+
 ## API
 
 | Method | Description |
 |--------|-------------|
 | `initialize(_:)` | Required once at launch |
+| `onNotificationOpened` | Handler for notification taps |
 | `login(externalId:identityHash:)` | Identify user |
 | `logout()` | Clear identity |
 | `trackEvent(_:properties:)` | Track custom event |

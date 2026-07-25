@@ -23,6 +23,33 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     private let sessions = SessionTracker()
     private var foregroundObserver: NSObjectProtocol?
 
+    /// Invoked when the user taps a notification, with the full APNs payload —
+    /// your custom `data` keys plus EngageKaro's own `ek_*` keys.
+    ///
+    /// Set this to route taps yourself:
+    /// ```swift
+    /// EngageKaro.shared.onNotificationOpened = { payload in
+    ///     if let target = payload["targetId"] as? String { router.open(target) }
+    /// }
+    /// ```
+    /// If you leave it nil, the SDK opens `ek_url` (the campaign's deep link)
+    /// itself. Registering a handler suppresses that — routing becomes yours,
+    /// including the deep link, available as `payload["ek_url"]`.
+    ///
+    /// A tap that lands before this is set (a cold launch from a notification)
+    /// is buffered and replayed on assignment, so it is never dropped.
+    public var onNotificationOpened: (([String: Any]) -> Void)? {
+        didSet {
+            guard let handler = onNotificationOpened, let buffered = pendingOpened else { return }
+            pendingOpened = nil
+            handler(buffered)
+        }
+    }
+
+    private var pendingOpened: [String: Any]?
+    /// Whatever delegate was installed before us, so we don't silently break it.
+    private weak var previousNotificationDelegate: UNUserNotificationCenterDelegate?
+
     public var isInitialized: Bool { config != nil }
 
     private var canSend: Bool {
@@ -39,6 +66,11 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     public func initialize(_ config: EngageKaroConfig) {
         self.config = config
         consentGiven = !config.requireConsent
+        // Take over the delegate, but keep a reference to the incumbent and forward
+        // to it — apps commonly set their own in AppDelegate, and silently dropping
+        // it would break their existing notification handling.
+        let existing = UNUserNotificationCenter.current().delegate
+        if existing !== self { previousNotificationDelegate = existing }
         UNUserNotificationCenter.current().delegate = self
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
@@ -182,6 +214,12 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
         if let id = data["ek_message_id"] as? String {
             await reportPushReceipt(messageId: id, event: "delivered", properties: data as? [String: Any])
         }
+        // An app that had its own delegate may want different presentation options;
+        // defer to it when it has an opinion.
+        if let prev = previousNotificationDelegate,
+           let options = await prev.userNotificationCenter?(center, willPresent: notification) {
+            return options
+        }
         return [.banner, .sound, .badge]
     }
 
@@ -193,5 +231,30 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
         if let id = data["ek_message_id"] as? String {
             await reportPushReceipt(messageId: id, event: "opened", properties: data as? [String: Any])
         }
+
+        let payload = (data as? [String: Any]) ?? [:]
+        if let handler = onNotificationOpened {
+            handler(payload)
+        } else if let url = deepLinkURL(from: payload) {
+            // No handler registered — open the campaign's deep link ourselves so
+            // links work with zero integration code.
+            _ = await UIApplication.shared.open(url)
+        } else {
+            // Nothing to act on yet. A cold launch runs this before the app has had
+            // a chance to set onNotificationOpened, so hold the payload and replay
+            // it if a handler shows up.
+            pendingOpened = payload
+        }
+
+        // Let the app's own delegate see the tap too.
+        await previousNotificationDelegate?.userNotificationCenter?(center, didReceive: response)
+    }
+
+    /// `ek_url` as a URL, if the payload carries a usable one.
+    private func deepLinkURL(from payload: [String: Any]) -> URL? {
+        guard let raw = payload["ek_url"] as? String else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        return url
     }
 }
