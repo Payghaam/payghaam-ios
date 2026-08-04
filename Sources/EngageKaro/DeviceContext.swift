@@ -1,10 +1,13 @@
 import Foundation
 import UIKit
 
-enum DeviceContext {
+/// `public` so wrapper SDKs (Flutter, React Native) that depend on this
+/// package can reuse the same device/locale snapshot instead of duplicating
+/// it — see `EngageKaro.deviceContextSnapshot(pushPermission:)`.
+public enum DeviceContext {
     static let sdkVersion = "0.1.0"
 
-    static func collect(sessionStart: Bool = false, pushPermission: String? = nil) -> [String: Any] {
+    public static func collect(sessionStart: Bool = false, pushPermission: String? = nil) -> [String: Any] {
         let locale = Locale.current
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         var body: [String: Any] = [

@@ -40,34 +40,44 @@ enum OfflineQueue {
         return true
     }
 
-    static func enqueue(method: String, path: String, body: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+    /// Runs `body` while holding `lock`, and — critically — is itself a plain
+    /// (non-async) function. `NSLock.lock()`/`unlock()` are `@available(*,
+    /// noasync)` in current SDKs: calling them directly from inside an `async
+    /// func`'s own body (as `flush` below is) warns today and hard-errors under
+    /// Swift 6 language mode. Routing every lock/unlock through this synchronous
+    /// helper means the actual NSLock calls are lexically inside a sync function,
+    /// which satisfies the check regardless of what async context calls in. Never
+    /// pass a `body` that itself suspends — these sections must stay synchronous.
+    private static func withLock<T>(_ body: () -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
-        var ops = loadOps()
-        ops.append(QueuedOp(method: method, path: path, body: data, queuedAt: Date()))
-        if ops.count > maxQueue { ops.removeFirst(ops.count - maxQueue) }
-        saveOps(ops)
+        return body()
+    }
+
+    static func enqueue(method: String, path: String, body: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        withLock {
+            var ops = loadOps()
+            ops.append(QueuedOp(method: method, path: path, body: data, queuedAt: Date()))
+            if ops.count > maxQueue { ops.removeFirst(ops.count - maxQueue) }
+            saveOps(ops)
+        }
     }
 
     /// Drain FIFO. Stops at the first retryable failure (still offline); drops
     /// ops the server permanently rejects. Safe to call repeatedly.
     static func flush(config: EngageKaroConfig) async {
-        lock.lock()
-        if flushing { lock.unlock(); return }
-        flushing = true
-        lock.unlock()
-        defer {
-            lock.lock()
-            flushing = false
-            lock.unlock()
+        let alreadyFlushing = withLock { () -> Bool in
+            if flushing { return true }
+            flushing = true
+            return false
         }
+        if alreadyFlushing { return }
+        defer { withLock { flushing = false } }
 
         while true {
-            lock.lock()
-            var ops = loadOps()
-            guard let op = ops.first else { lock.unlock(); return }
-            lock.unlock()
+            let op: QueuedOp? = withLock { loadOps().first }
+            guard let op else { return }
 
             do {
                 let body = (try? JSONSerialization.jsonObject(with: op.body)) as? [String: Any] ?? [:]
@@ -77,11 +87,11 @@ enum OfflineQueue {
                 // fall through: permanently rejected, drop it
             }
 
-            lock.lock()
-            ops = loadOps()
-            if !ops.isEmpty { ops.removeFirst() }
-            saveOps(ops)
-            lock.unlock()
+            withLock {
+                var ops = loadOps()
+                if !ops.isEmpty { ops.removeFirst() }
+                saveOps(ops)
+            }
         }
     }
 }

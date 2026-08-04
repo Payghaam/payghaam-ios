@@ -64,8 +64,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
 
     /// Call once at app launch (e.g. AppDelegate / @main App init).
     public func initialize(_ config: EngageKaroConfig) {
-        self.config = config
-        consentGiven = !config.requireConsent
+        setupCore(config)
         // Take over the delegate, but keep a reference to the incumbent and forward
         // to it — apps commonly set their own in AppDelegate, and silently dropping
         // it would break their existing notification handling.
@@ -80,6 +79,17 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
             Task { await self?.onForeground() }
         }
         Task { await onForeground() }
+    }
+
+    /// The state [initialize] sets up, minus delegate/foreground-observer
+    /// installation. Used directly by [persistBridgeConfig]: wrapper SDKs
+    /// (Flutter, React Native) install their own `UNUserNotificationCenterDelegate`
+    /// and own their own foreground/session timing on the Dart/JS side, so running
+    /// this class's copy too would double-dispatch taps. See
+    /// sdk-native-wrapper-design.md.
+    private func setupCore(_ config: EngageKaroConfig) {
+        self.config = config
+        consentGiven = !config.requireConsent
     }
 
     private func pushPermissionLabel() async -> String? {
@@ -193,6 +203,12 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
         defaults.set(externalId, forKey: "ek_external_id")
     }
 
+    /// The same device/locale snapshot the SDK sends on `identify` calls,
+    /// exposed for wrapper SDKs so they don't need to reimplement it.
+    public static func deviceContextSnapshot(pushPermission: String? = nil) -> [String: Any] {
+        DeviceContext.collect(pushPermission: pushPermission)
+    }
+
     public func reportPushReceipt(messageId: String, event: String, properties: [String: Any]? = nil) async {
         guard canSend, let config else { return }
         try? await ApiClient.reportReceipt(
@@ -204,50 +220,137 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
         )
     }
 
-    // MARK: - UNUserNotificationCenterDelegate
+    // MARK: - Cross-platform wrapper support: raw API pass-through
+    //
+    // Phase 2 of the wrapper refactor (see sdk-native-wrapper-design.md §4.5):
+    // sdks/flutter and sdks/react-native used to ship their own HTTP clients and
+    // offline queues in Dart/JS. `trackEvent`/`addTags`/`reportPushReceipt` above
+    // are already safe to call directly from a wrapper (no `initialize()`-only side
+    // effects), so those are reused as-is; `identify` and a generic
+    // `addSubscription` have no existing public equivalent, so those two are new
+    // here. Requires `persistBridgeConfig` to have run first.
 
-    public func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        let data = notification.request.content.userInfo
-        if let id = data["ek_message_id"] as? String {
-            await reportPushReceipt(messageId: id, event: "delivered", properties: data as? [String: Any])
+    /// Mirrors sdks/android's `EngageKaro.persistBridgeConfig`. Sets up just enough
+    /// state (`config`, `externalId`, identity hash) for the bridge pass-through
+    /// methods to work, without installing a delegate/foreground observer — the
+    /// wrapper already has its own. Safe to call repeatedly, e.g. once at wrapper
+    /// `initialize()` (`externalId` nil) and again at `login()` (`externalId` set).
+    /// Deliberately separate from `shareConfig(appGroup:...)` above — that method's
+    /// job (NSE App-Group `UserDefaults`) is unrelated.
+    public func persistBridgeConfig(apiKey: String, baseUrl: String, externalId: String? = nil, identityHash: String? = nil) {
+        if !isInitialized {
+            setupCore(EngageKaroConfig(appId: "", apiKey: apiKey, baseUrl: baseUrl))
         }
-        // An app that had its own delegate may want different presentation options;
-        // defer to it when it has an opinion.
-        if let prev = previousNotificationDelegate,
-           let options = await prev.userNotificationCenter?(center, willPresent: notification) {
-            return options
+        if let externalId {
+            self.externalId = externalId
+            UserDefaults.standard.set(externalId, forKey: "engagekaro_external_id")
         }
-        return [.banner, .sound, .badge]
+        if let identityHash {
+            ApiClient.identityHash = identityHash
+        }
     }
 
+    /// Clears the identity `persistBridgeConfig` set — call from a wrapper's
+    /// `logout()`. `persistBridgeConfig` only ever *sets* `externalId` (so a
+    /// repeated call can't accidentally wipe it); this is the explicit clear path.
+    public func clearBridgeIdentity() {
+        externalId = nil
+        ApiClient.identityHash = nil
+        UserDefaults.standard.removeObject(forKey: "engagekaro_external_id")
+    }
+
+    /// Raw identify call — the wrapper's own device-context snapshot goes in `deviceContext`.
+    public func bridgeIdentify(deviceContext: [String: Any]? = nil) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.identify(config: config, externalId: externalId, deviceContext: deviceContext)
+    }
+
+    /// Generic channel subscription (push token, email, SMS) for the current user.
+    public func bridgeAddSubscription(type: SubscriptionType, token: String) async throws {
+        guard canSend, let config, let externalId else { return }
+        try await ApiClient.addSubscription(config: config, externalId: externalId, type: type, token: token)
+    }
+
+    /// Drains anything the offline queue accumulated. Safe to call repeatedly.
+    public func bridgeFlushQueue() async {
+        guard let config else { return }
+        await OfflineQueue.flush(config: config)
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    // Completion-handler form, NOT `async` — same swift-frontend IRGen crash
+    // class as userNotificationCenter(_:didReceive:) below, just for this
+    // method's signature/types instead. See the comment there for the full
+    // explanation.
     public func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
-        let data = response.notification.request.content.userInfo
-        if let id = data["ek_message_id"] as? String {
-            await reportPushReceipt(messageId: id, event: "opened", properties: data as? [String: Any])
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        Task {
+            let data = notification.request.content.userInfo
+            if let id = data["ek_message_id"] as? String {
+                await reportPushReceipt(messageId: id, event: "delivered", properties: data as? [String: Any])
+            }
+            // An app that had its own delegate may want different presentation
+            // options; defer to it when it has an opinion. `responds(to:)` first,
+            // rather than relying on the optional-chained call to no-op safely —
+            // if we handed `completionHandler` straight to a `prev?.method(...)`
+            // that turns out to be unimplemented, nothing would ever call it.
+            let selector = #selector(
+                UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:)
+            )
+            if let prev = previousNotificationDelegate, prev.responds(to: selector) {
+                prev.userNotificationCenter?(center, willPresent: notification, withCompletionHandler: completionHandler)
+            } else {
+                completionHandler([.banner, .sound, .badge])
+            }
         }
+    }
 
-        let payload = (data as? [String: Any]) ?? [:]
-        if let handler = onNotificationOpened {
-            handler(payload)
-        } else if let url = deepLinkURL(from: payload) {
-            // No handler registered — open the campaign's deep link ourselves so
-            // links work with zero integration code.
-            _ = await UIApplication.shared.open(url)
-        } else {
-            // Nothing to act on yet. A cold launch runs this before the app has had
-            // a chance to set onNotificationOpened, so hold the payload and replay
-            // it if a handler shows up.
-            pendingOpened = payload
+    // Completion-handler form, NOT `async` — Swift 6.2.3's IRGen crashes
+    // synthesizing the @objc bridging thunk for this specific delegate method
+    // (userNotificationCenter(_:didReceive:)) whenever an async form of its
+    // signature is used, on EITHER side: as this method's own declaration, or in
+    // a call to `previousNotificationDelegate`'s async overload. (Crash signature:
+    // reabstraction thunk mangled name mentioning UNNotificationResponse — a real
+    // swift-frontend bug, not anything about this method's logic. willPresent
+    // above uses a different signature/types and isn't affected.) Both sides
+    // below stick to the completion-handler form to avoid the thunk entirely.
+    public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        Task {
+            let data = response.notification.request.content.userInfo
+            if let id = data["ek_message_id"] as? String {
+                await reportPushReceipt(messageId: id, event: "opened", properties: data as? [String: Any])
+            }
+
+            let payload = (data as? [String: Any]) ?? [:]
+            if let handler = onNotificationOpened {
+                handler(payload)
+            } else if let url = deepLinkURL(from: payload) {
+                // No handler registered — open the campaign's deep link ourselves so
+                // links work with zero integration code.
+                _ = await UIApplication.shared.open(url)
+            } else {
+                // Nothing to act on yet. A cold launch runs this before the app has had
+                // a chance to set onNotificationOpened, so hold the payload and replay
+                // it if a handler shows up.
+                pendingOpened = payload
+            }
+
+            // Let the app's own delegate see the tap too. Fire-and-forget: we don't
+            // need to wait for it before calling our own completion handler.
+            previousNotificationDelegate?.userNotificationCenter?(
+                center, didReceive: response, withCompletionHandler: {}
+            )
+
+            completionHandler()
         }
-
-        // Let the app's own delegate see the tap too.
-        await previousNotificationDelegate?.userNotificationCenter?(center, didReceive: response)
     }
 
     /// `ek_url` as a URL, if the payload carries a usable one.
