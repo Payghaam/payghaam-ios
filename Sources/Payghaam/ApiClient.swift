@@ -1,6 +1,6 @@
 import Foundation
 
-public struct EngageKaroConfig: Sendable {
+public struct PayghaamConfig: Sendable {
     public let appId: String
     public let apiKey: String
     public let baseUrl: String
@@ -32,17 +32,17 @@ public enum SubscriptionType: String, Sendable {
     case sms = "SMS"
 }
 
-public struct EngageKaroApiError: Error, LocalizedError {
+public struct PayghaamApiError: Error, LocalizedError {
     public let statusCode: Int
     public let body: String
-    public var errorDescription: String? { "EngageKaroApiError(\(statusCode)): \(body)" }
+    public var errorDescription: String? { "PayghaamApiError(\(statusCode)): \(body)" }
 }
 
 enum ApiClient {
     static var identityHash: String?
 
     static func identify(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         externalId: String?,
         deviceContext: [String: Any]? = nil
     ) async throws {
@@ -53,7 +53,7 @@ enum ApiClient {
     }
 
     static func addSubscription(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         externalId: String,
         type: SubscriptionType,
         token: String
@@ -64,12 +64,12 @@ enum ApiClient {
         ])
     }
 
-    static func updateTags(config: EngageKaroConfig, externalId: String, tags: [String: Any?]) async throws {
+    static func updateTags(config: PayghaamConfig, externalId: String, tags: [String: Any?]) async throws {
         try await put(config: config, path: "/users/\(externalId)/tags", body: ["tags": tags])
     }
 
     static func track(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         name: String,
         externalId: String?,
         properties: [String: Any]?
@@ -81,7 +81,7 @@ enum ApiClient {
     }
 
     static func reportReceipt(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         messageId: String,
         event: String,
         externalId: String?,
@@ -95,16 +95,16 @@ enum ApiClient {
 
     // Fire-and-forget path: send now, or park in the offline queue on a
     // retryable failure so offline activity isn't lost.
-    private static func post(config: EngageKaroConfig, path: String, body: [String: Any]) async throws {
+    private static func post(config: PayghaamConfig, path: String, body: [String: Any]) async throws {
         try await sendOrQueue(config: config, method: "POST", path: path, body: body)
     }
 
-    private static func put(config: EngageKaroConfig, path: String, body: [String: Any]) async throws {
+    private static func put(config: PayghaamConfig, path: String, body: [String: Any]) async throws {
         try await sendOrQueue(config: config, method: "PUT", path: path, body: body)
     }
 
     private static func sendOrQueue(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         method: String,
         path: String,
         body: [String: Any]
@@ -120,7 +120,7 @@ enum ApiClient {
 
     /// Direct request without queueing — used by OfflineQueue's drain.
     static func rawRequest(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         method: String,
         path: String,
         body: [String: Any]
@@ -129,7 +129,7 @@ enum ApiClient {
     }
 
     private static func request(
-        config: EngageKaroConfig,
+        config: PayghaamConfig,
         method: String,
         path: String,
         body: [String: Any]
@@ -141,13 +141,13 @@ enum ApiClient {
         req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue(config.apiKey, forHTTPHeaderField: "X-Api-Key")
         if let hash = identityHash {
-            req.setValue(hash, forHTTPHeaderField: "X-Engagekaro-Identity-Hash")
+            req.setValue(hash, forHTTPHeaderField: "X-Payghaam-Identity-Hash")
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, res) = try await URLSession.shared.data(for: req)
         guard let http = res as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
-            throw EngageKaroApiError(statusCode: http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
+            throw PayghaamApiError(statusCode: http.statusCode, body: String(data: data, encoding: .utf8) ?? "")
         }
     }
 }

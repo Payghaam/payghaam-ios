@@ -3,7 +3,7 @@ import UIKit
 
 /// `public` so wrapper SDKs (Flutter, React Native) that depend on this
 /// package can reuse the same device/locale snapshot instead of duplicating
-/// it — see `EngageKaro.deviceContextSnapshot(pushPermission:)`.
+/// it — see `Payghaam.deviceContextSnapshot(pushPermission:)`.
 public enum DeviceContext {
     static let sdkVersion = "0.1.0"
 

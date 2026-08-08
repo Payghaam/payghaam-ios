@@ -1,4 +1,4 @@
-# EngageKaro iOS SDK
+# Payghaam iOS SDK
 
 Native Swift SDK for iOS — direct APNs push (no Firebase), user identity, tags, and events.
 
@@ -15,18 +15,18 @@ Or in `Package.swift`:
 ## Setup
 
 1. Enable **Push Notifications**, **Background Modes → Remote notifications**, and **App Groups** on your app target.
-2. Configure APNs in the EngageKaro dashboard (Channels → iOS · APNs).
+2. Configure APNs in the Payghaam dashboard (Channels → iOS · APNs).
 3. Add a Notification Service Extension for terminated-state delivery receipts (optional — see [iOS setup](../flutter/IOS_SETUP.md)).
 
 ## Quick start
 
 ```swift
-import EngageKaro
+import Payghaam
 
 @main
 struct MyApp: App {
     init() {
-        EngageKaro.shared.initialize(EngageKaroConfig(
+        Payghaam.shared.initialize(PayghaamConfig(
             appId: "YOUR_PROJECT_ID",
             apiKey: "ek_client_...",
             baseUrl: "https://api.yourhost.com"
@@ -40,10 +40,10 @@ struct MyApp: App {
 
 // After user signs in:
 Task {
-    try await EngageKaro.shared.login(externalId: "user-123")
-    _ = await EngageKaro.shared.requestPushPermission()
-    EngageKaro.shared.shareConfig(
-        appGroup: "group.com.yourcompany.app.engagekaro",
+    try await Payghaam.shared.login(externalId: "user-123")
+    _ = await Payghaam.shared.requestPushPermission()
+    Payghaam.shared.shareConfig(
+        appGroup: "group.com.yourcompany.app.payghaam",
         apiBase: "https://api.yourhost.com",
         apiKey: "ek_client_...",
         externalId: "user-123"
@@ -56,7 +56,7 @@ In your AppDelegate (or `@UIApplicationDelegateAdaptor`):
 ```swift
 func application(_ application: UIApplication,
                    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-    Task { try? await EngageKaro.shared.setDeviceToken(deviceToken) }
+    Task { try? await Payghaam.shared.setDeviceToken(deviceToken) }
 }
 ```
 
@@ -66,7 +66,7 @@ A campaign's **Deep link URL** arrives as `ek_url`, and anything you pass as `da
 on `POST /api/notifications` arrives alongside it:
 
 ```swift
-EngageKaro.shared.onNotificationOpened = { payload in
+Payghaam.shared.onNotificationOpened = { payload in
     // payload["ek_url"]   → "myapp://offers/summer"
     // payload["targetId"] → your own data key
     if let target = payload["targetId"] as? String { router.openOffer(target) }

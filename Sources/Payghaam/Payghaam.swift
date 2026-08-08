@@ -2,20 +2,20 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// EngageKaro iOS SDK — direct APNs (no Firebase on iOS).
+/// Payghaam iOS SDK — direct APNs (no Firebase on iOS).
 ///
 /// ```swift
-/// EngageKaro.shared.initialize(EngageKaroConfig(
+/// Payghaam.shared.initialize(PayghaamConfig(
 ///     appId: "...", apiKey: "ek_client_...", baseUrl: "https://api.host"
 /// ))
-/// await EngageKaro.shared.login(externalId: "user-123")
-/// await EngageKaro.shared.requestPushPermission()
+/// await Payghaam.shared.login(externalId: "user-123")
+/// await Payghaam.shared.requestPushPermission()
 /// ```
 @MainActor
-public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
-    public static let shared = EngageKaro()
+public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
+    public static let shared = Payghaam()
 
-    private var config: EngageKaroConfig?
+    private var config: PayghaamConfig?
     private var externalId: String?
     private var consentGiven = true
     private var pendingPushToken: String?
@@ -24,11 +24,11 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     private var foregroundObserver: NSObjectProtocol?
 
     /// Invoked when the user taps a notification, with the full APNs payload —
-    /// your custom `data` keys plus EngageKaro's own `ek_*` keys.
+    /// your custom `data` keys plus Payghaam's own `ek_*` keys.
     ///
     /// Set this to route taps yourself:
     /// ```swift
-    /// EngageKaro.shared.onNotificationOpened = { payload in
+    /// Payghaam.shared.onNotificationOpened = { payload in
     ///     if let target = payload["targetId"] as? String { router.open(target) }
     /// }
     /// ```
@@ -59,11 +59,11 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
 
     private override init() {
         super.init()
-        externalId = UserDefaults.standard.string(forKey: "engagekaro_external_id")
+        externalId = UserDefaults.standard.string(forKey: "payghaam_external_id")
     }
 
     /// Call once at app launch (e.g. AppDelegate / @main App init).
-    public func initialize(_ config: EngageKaroConfig) {
+    public func initialize(_ config: PayghaamConfig) {
         setupCore(config)
         // Take over the delegate, but keep a reference to the incumbent and forward
         // to it — apps commonly set their own in AppDelegate, and silently dropping
@@ -87,7 +87,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     /// and own their own foreground/session timing on the Dart/JS side, so running
     /// this class's copy too would double-dispatch taps. See
     /// sdk-native-wrapper-design.md.
-    private func setupCore(_ config: EngageKaroConfig) {
+    private func setupCore(_ config: PayghaamConfig) {
         self.config = config
         consentGiven = !config.requireConsent
     }
@@ -133,7 +133,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     public func login(externalId: String, identityHash: String? = nil) async throws {
         self.externalId = externalId
         ApiClient.identityHash = identityHash
-        UserDefaults.standard.set(externalId, forKey: "engagekaro_external_id")
+        UserDefaults.standard.set(externalId, forKey: "payghaam_external_id")
         guard canSend else { return }
         Task { await runPostLoginTasks() }
     }
@@ -141,7 +141,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     public func logout() {
         externalId = nil
         ApiClient.identityHash = nil
-        UserDefaults.standard.removeObject(forKey: "engagekaro_external_id")
+        UserDefaults.standard.removeObject(forKey: "payghaam_external_id")
     }
 
     public func trackEvent(_ name: String, properties: [String: Any]? = nil) async throws {
@@ -155,7 +155,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
 
     public func addTags(_ tags: [String: Any?]) async throws {
         guard canSend, let config, let externalId else {
-            throw NSError(domain: "EngageKaro", code: 1, userInfo: [NSLocalizedDescriptionKey: "Call login() first"])
+            throw NSError(domain: "Payghaam", code: 1, userInfo: [NSLocalizedDescriptionKey: "Call login() first"])
         }
         try await ApiClient.updateTags(config: config, externalId: externalId, tags: tags)
     }
@@ -230,7 +230,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     // `addSubscription` have no existing public equivalent, so those two are new
     // here. Requires `persistBridgeConfig` to have run first.
 
-    /// Mirrors sdks/android's `EngageKaro.persistBridgeConfig`. Sets up just enough
+    /// Mirrors sdks/android's `Payghaam.persistBridgeConfig`. Sets up just enough
     /// state (`config`, `externalId`, identity hash) for the bridge pass-through
     /// methods to work, without installing a delegate/foreground observer — the
     /// wrapper already has its own. Safe to call repeatedly, e.g. once at wrapper
@@ -239,11 +239,11 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     /// job (NSE App-Group `UserDefaults`) is unrelated.
     public func persistBridgeConfig(apiKey: String, baseUrl: String, externalId: String? = nil, identityHash: String? = nil) {
         if !isInitialized {
-            setupCore(EngageKaroConfig(appId: "", apiKey: apiKey, baseUrl: baseUrl))
+            setupCore(PayghaamConfig(appId: "", apiKey: apiKey, baseUrl: baseUrl))
         }
         if let externalId {
             self.externalId = externalId
-            UserDefaults.standard.set(externalId, forKey: "engagekaro_external_id")
+            UserDefaults.standard.set(externalId, forKey: "payghaam_external_id")
         }
         if let identityHash {
             ApiClient.identityHash = identityHash
@@ -256,7 +256,7 @@ public final class EngageKaro: NSObject, UNUserNotificationCenterDelegate {
     public func clearBridgeIdentity() {
         externalId = nil
         ApiClient.identityHash = nil
-        UserDefaults.standard.removeObject(forKey: "engagekaro_external_id")
+        UserDefaults.standard.removeObject(forKey: "payghaam_external_id")
     }
 
     /// Raw identify call — the wrapper's own device-context snapshot goes in `deviceContext`.

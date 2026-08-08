@@ -11,7 +11,7 @@ struct QueuedOp: Codable {
 }
 
 enum OfflineQueue {
-    private static let storageKey = "engagekaro.queue.v1"
+    private static let storageKey = "payghaam.queue.v1"
     private static let maxQueue = 200
     private static let maxAge: TimeInterval = 7 * 24 * 3600
     private static let lock = NSLock()
@@ -34,7 +34,7 @@ enum OfflineQueue {
     // HTTP 4xx (except 408/429) means the payload will never be accepted;
     // everything else (network, timeout, 5xx) is worth retrying.
     static func isRetryable(_ error: Error) -> Bool {
-        if let api = error as? EngageKaroApiError {
+        if let api = error as? PayghaamApiError {
             return api.statusCode == 408 || api.statusCode == 429 || api.statusCode >= 500
         }
         return true
@@ -66,7 +66,7 @@ enum OfflineQueue {
 
     /// Drain FIFO. Stops at the first retryable failure (still offline); drops
     /// ops the server permanently rejects. Safe to call repeatedly.
-    static func flush(config: EngageKaroConfig) async {
+    static func flush(config: PayghaamConfig) async {
         let alreadyFlushing = withLock { () -> Bool in
             if flushing { return true }
             flushing = true

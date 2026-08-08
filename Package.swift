@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "EngageKaro",
+    name: "Payghaam",
     platforms: [.iOS(.v15)],
     products: [
-        .library(name: "EngageKaro", targets: ["EngageKaro"]),
+        .library(name: "Payghaam", targets: ["Payghaam"]),
     ],
     targets: [
-        .target(name: "EngageKaro", path: "Sources/EngageKaro"),
+        .target(name: "Payghaam", path: "Sources/Payghaam"),
     ]
 )
