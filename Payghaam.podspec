@@ -6,11 +6,11 @@ Pod::Spec.new do |s|
                         '(see Package.swift) for apps that integrate it directly; this ' \
                         'podspec exists so CocoaPods-based wrapper SDKs (Flutter, React ' \
                         'Native) can depend on the same implementation instead of ' \
-                        'duplicating it — see sdk-native-wrapper-design.md.'
-  s.homepage         = 'https://github.com/msamoeed/engagekaro'
+                        'duplicating it (the canonical native Payghaam SDK, kept in a separate repo: github.com/payghaam/payghaam-ios).'
+  s.homepage         = 'https://github.com/payghaam/payghaam-ios'
   s.license          = { :type => 'MIT' }
   s.author           = { 'Payghaam' => 'dev@payghaam.com' }
-  s.source           = { :path => '.' }
+  s.source           = { :git => 'https://github.com/payghaam/payghaam-ios.git', :tag => s.version.to_s }
   s.source_files     = 'Sources/Payghaam/**/*.swift'
   s.ios.deployment_target = '15.0'
   s.swift_version    = '5.9'
