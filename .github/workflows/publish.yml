@@ -1,0 +1,18 @@
+name: Publish
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  publish:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: pod lib lint Payghaam.podspec --allow-warnings
+      # Requires a COCOAPODS_TRUNK_TOKEN repo secret — see RELEASING.md for
+      # how to generate one. `pod trunk push` reads it from this env var
+      # automatically (same mechanism as the local ~/.netrc session file).
+      - run: pod trunk push Payghaam.podspec --allow-warnings
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}

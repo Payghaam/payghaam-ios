@@ -9,5 +9,13 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - run: swift build
-      - run: swift test
+      # Plain `swift build`/`swift test` compile for the host platform
+      # (macOS) by default, regardless of the `platforms: [.iOS(.v15)]`
+      # restriction in Package.swift — that only constrains the minimum
+      # deployment target when something builds this package FOR iOS, it
+      # doesn't make the bare SwiftPM CLI cross-compile. Since this package
+      # imports UIKit (iOS-only, not present in the macOS SDK), a plain
+      # `swift build` here fails with "no such module 'UIKit'" even though
+      # the package is perfectly valid. xcodebuild against a generic iOS
+      # destination builds it the way any real iOS consumer actually would.
+      - run: xcodebuild build -scheme Payghaam -destination 'generic/platform=iOS'
