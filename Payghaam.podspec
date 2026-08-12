@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'Payghaam'
-  s.version          = '0.1.0'
+  s.version          = '0.1.2'
   s.summary          = 'Payghaam iOS SDK — direct APNs push, identify, tags, events.'
   s.description      = 'Native Swift SDK. Also distributed via Swift Package Manager ' \
                         '(see Package.swift) for apps that integrate it directly; this ' \

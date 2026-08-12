@@ -238,8 +238,16 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     /// Deliberately separate from `shareConfig(appGroup:...)` above — that method's
     /// job (NSE App-Group `UserDefaults`) is unrelated.
     public func persistBridgeConfig(apiKey: String, baseUrl: String, externalId: String? = nil, identityHash: String? = nil) {
-        if !isInitialized {
-            setupCore(PayghaamConfig(appId: "", apiKey: apiKey, baseUrl: baseUrl))
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBase = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Rebind whenever key/baseUrl actually changed, not just on first call —
+        // the process can outlive a single init (e.g. Flutter hot restart).
+        let needsCore =
+            !isInitialized ||
+            config?.apiKey != trimmedKey ||
+            config?.baseUrl != trimmedBase
+        if needsCore {
+            setupCore(PayghaamConfig(appId: "", apiKey: trimmedKey, baseUrl: trimmedBase))
         }
         if let externalId {
             self.externalId = externalId
