@@ -39,6 +39,12 @@ public enum PayghaamLiveActivities {
     private static var rescanHooks: [() -> Void] = []
     private static var foregroundHookInstalled = false
 
+    private static func removeObservingKitId(_ id: String) {
+        lock.lock()
+        observingKitIds.remove(id)
+        lock.unlock()
+    }
+
     /// Begin observing both token streams for `Attributes`.
     public static func observe<Attributes: ActivityAttributes>(
         _ type: Attributes.Type,
@@ -101,9 +107,7 @@ public enum PayghaamLiveActivities {
             } else {
                 await activity.end(using: finalState, dismissalPolicy: .immediate)
             }
-            lock.lock()
-            observingKitIds.remove(activity.id)
-            lock.unlock()
+            removeObservingKitId(activity.id)
         }
         #endif
     }
@@ -137,7 +141,7 @@ public enum PayghaamLiveActivities {
         refreshAll()
         Task.detached(priority: .utility) {
             for (i, delayNs) in [500_000_000, 2_000_000_000].enumerated() {
-                try? await Task.sleep(nanoseconds: delayNs)
+                try? await Task.sleep(nanoseconds: UInt64(delayNs))
                 refreshAll()
                 if i == 0 {
                     NSLog("[Payghaam] Live Activity refresh retry reason=\(reason)")
@@ -179,7 +183,7 @@ public enum PayghaamLiveActivities {
         if let existing = activity.pushToken {
             let token = hex(existing)
             Task.detached(priority: .utility) {
-                await register(activityId: handle, token: token, attributesType: typeName)
+                _ = await register(activityId: handle, token: token, attributesType: typeName)
             }
         } else if activity.activityState == .active {
             NSLog(
@@ -197,11 +201,9 @@ public enum PayghaamLiveActivities {
         Task.detached(priority: .utility) {
             for await tokenData in activity.pushTokenUpdates {
                 let token = hex(tokenData)
-                await register(activityId: handle, token: token, attributesType: typeName)
+                _ = await register(activityId: handle, token: token, attributesType: typeName)
             }
-            lock.lock()
-            observingKitIds.remove(kitId)
-            lock.unlock()
+            removeObservingKitId(kitId)
         }
     }
 
