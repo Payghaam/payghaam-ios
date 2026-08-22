@@ -1,0 +1,78 @@
+# Docs follow-up
+#
+# Product docs: Payghaam/payghaam-mono. Comment on PRs here; optionally
+# repository_dispatch the mono watcher if DOCS_DISPATCH_TOKEN is set.
+# Mono also clones this public repo on a weekly cron with no secret.
+
+name: Docs follow-up
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+concurrency:
+  group: docs-follow-up-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Comment if native iOS SDK likely needs dashboard docs
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+          DOCS: https://github.com/Payghaam/payghaam-mono/blob/main/apps/dashboard/app/(docs)/docs
+        run: |
+          set -euo pipefail
+          FILES="$(git diff --name-only "${BASE}...${HEAD}" || true)"
+          echo "$FILES"
+          if ! echo "$FILES" | grep -Eq '^(Sources/|Package\.swift|README\.md)'; then
+            echo "No docs-mapped paths."
+            exit 0
+          fi
+          BODY="$(cat <<EOF
+          <!-- docs-follow-up-bot -->
+          ## Docs follow-up
+
+          These iOS SDK changes likely need [payghaam-mono](https://github.com/Payghaam/payghaam-mono) dashboard docs:
+
+          - [iOS SDK]($DOCS/sdk/ios/page.tsx)
+          - [Flutter iOS setup]($DOCS/sdk/flutter/ios/page.tsx) (NSE / APNs overlap)
+          - [Push]($DOCS/channels/push/page.tsx)
+
+          Mono clones this public repo weekly (optional \`DOCS_DISPATCH_TOKEN\` pings sooner).
+          EOF
+          )"
+          EXISTING="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --jq '[.[] | select(.body | contains("docs-follow-up-bot")) | .id] | first // empty')"
+          if [ -n "${EXISTING:-}" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING}" -f body="$BODY"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="$BODY"
+          fi
+
+  ping-mono:
+    if: github.event_name == 'push' && secrets.DOCS_DISPATCH_TOKEN != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify payghaam-mono docs watcher
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/Payghaam/payghaam-mono/dispatches --input - <<EOF
+          {"event_type":"sdk-docs","client_payload":{"repo":"${GITHUB_REPOSITORY}","sha":"${GITHUB_SHA}","ref":"${GITHUB_REF_NAME}"}}
+          EOF

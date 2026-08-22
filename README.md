@@ -58,7 +58,19 @@ func application(_ application: UIApplication,
                    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
     Task { try? await Payghaam.shared.setDeviceToken(deviceToken) }
 }
+
+// Required for push-to-start / Live Activity update token registration while suspended:
+func application(_ application: UIApplication,
+                   didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                   fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+    Payghaam.shared.handleRemoteNotification(userInfo, fetchCompletionHandler: completionHandler)
+}
 ```
+
+Live Activities: call `PayghaamLiveActivities.observe(YourAttributes.self)` once at launch (before
+`login()`). The SDK re-attaches on foreground, notification delivery, and the push wake handler
+above. After push-to-start, the user must tap **Allow** on the lock-screen activity before
+ActivityKit mints the update token.
 
 ## Handling taps and deep links
 

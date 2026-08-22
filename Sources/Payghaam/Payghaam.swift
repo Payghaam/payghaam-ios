@@ -19,6 +19,10 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     private var externalId: String?
     private var consentGiven = true
     private var pendingPushToken: String?
+    private var pendingLiveActivityStartToken: String?
+    /// Update tokens that arrived before `login()`. Keyed by activity handle so
+    /// a push-to-start that races identify still lands after the user is known.
+    private var pendingLiveActivityUpdateTokens: [String: (token: String, attributesType: String?)] = [:]
     private var currentToken: String?
     private let sessions = SessionTracker()
     private var foregroundObserver: NSObjectProtocol?
@@ -112,14 +116,37 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
                 deviceContext: DeviceContext.collect(sessionStart: countSession, pushPermission: permission)
             )
         } catch {
-            // Best-effort device profile sync.
+            // Best-effort device profile sync — but log so a bad API key /
+            // identity-hash reject is visible when debugging "no subscriber".
+            NSLog("[Payghaam] identify failed: \(error.localizedDescription)")
         }
     }
 
     private func runPostLoginTasks() async {
         guard canSend else { return }
         if let token = pendingPushToken ?? currentToken {
-            try? await registerPushToken(token)
+            // Was `try?` — a 401/403 here meant the APNs token looked fine in
+            // the host app while the dashboard stayed empty. Log so integrators
+            // can see the failure next to their own token logs.
+            do {
+                try await registerPushToken(token)
+            } catch {
+                NSLog("[Payghaam] registerPushToken after login failed: \(error.localizedDescription)")
+            }
+        }
+        // Same reasoning as the push token: the system hands this over at launch,
+        // typically before the app knows who the user is, so it waits for login.
+        if let startToken = pendingLiveActivityStartToken {
+            await registerLiveActivityStartToken(startToken)
+        }
+        let pendingUpdates = pendingLiveActivityUpdateTokens
+        pendingLiveActivityUpdateTokens.removeAll()
+        for (activityId, pending) in pendingUpdates {
+            await registerLiveActivityUpdateToken(
+                activityId: activityId,
+                token: pending.token,
+                attributesType: pending.attributesType
+            )
         }
         await pingDeviceContext(sessionStart: true)
     }
@@ -128,6 +155,42 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         try? await pingDeviceContext(sessionStart: true)
         // Drain anything queued while the device was offline.
         if let config { await OfflineQueue.flush(config: config) }
+        refreshLiveActivitiesOnPushWake()
+    }
+
+    // MARK: - Live Activity push wake
+
+    /// Re-attaches to running Live Activities after a remote notification may have
+    /// started or updated one. Idempotent — safe on every push and foreground.
+    ///
+    /// The SDK calls this from its notification delegate and from `onForeground()`.
+    /// Also forward AppDelegate background wakes:
+    /// ```swift
+    /// func application(_ application: UIApplication,
+    ///                    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    ///                    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+    ///     Payghaam.shared.handleRemoteNotification(userInfo, fetchCompletionHandler: completionHandler)
+    /// }
+    /// ```
+    public func refreshLiveActivitiesOnPushWake() {
+        if #available(iOS 16.1, *) {
+            PayghaamLiveActivities.refreshAllDelayedRetry(reason: "push_wake")
+        }
+    }
+
+    /// Background / silent push entry point. Refreshes Live Activity tokens, then
+    /// reports `.newData` so iOS knows the wake was handled.
+    public func handleRemoteNotification(
+        _ userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        refreshLiveActivitiesOnPushWake()
+        completionHandler(.newData)
+    }
+
+    /// Foreground or tapless delivery when no completion handler is required.
+    public func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) {
+        refreshLiveActivitiesOnPushWake()
     }
 
     public func login(externalId: String, identityHash: String? = nil) async throws {
@@ -193,6 +256,118 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
             token: token
         )
         pendingPushToken = nil
+    }
+
+    // MARK: - Live Activities
+
+    /// Push-to-start token (iOS 17.2+). Device-level, so it is registered as an
+    /// ordinary subscription. Called by `PayghaamLiveActivities.observe`.
+    ///
+    /// Buffered like the push token when it arrives before `login()`: the system
+    /// hands this over at app launch, which is routinely before the app knows
+    /// who the user is.
+    public func registerLiveActivityStartToken(_ token: String) async {
+        guard canSend, let config else { return }
+        guard let externalId else {
+            pendingLiveActivityStartToken = token
+            return
+        }
+        // Was `try?` — a failed subscription POST left Start via REST doing
+        // nothing with no log, while Update after a local start still worked
+        // (that path uses the per-activity update token).
+        do {
+            try await ApiClient.addSubscription(
+                config: config,
+                externalId: externalId,
+                type: .iosLiveActivityStart,
+                token: token
+            )
+            pendingLiveActivityStartToken = nil
+            NSLog("[Payghaam] IOS_LIVE_ACTIVITY_START registered (\(token.prefix(12))…)")
+            postNotificationOnMain(
+                name: .payghaamLiveActivityStartToken,
+                userInfo: ["ok": true, "tokenPrefix": String(token.prefix(12))]
+            )
+        } catch {
+            NSLog("[Payghaam] IOS_LIVE_ACTIVITY_START register FAILED: \(error.localizedDescription)")
+            postNotificationOnMain(
+                name: .payghaamLiveActivityStartToken,
+                userInfo: ["ok": false, "error": error.localizedDescription]
+            )
+        }
+    }
+
+    /// Per-activity update token. Re-posted whenever the system rotates it, so
+    /// this is expected to be called many times for one activity.
+    ///
+    /// Buffered briefly when it arrives before `login()` (push-to-start can race
+    /// identify). After login, pending entries are flushed from
+    /// `runPostLoginTasks`. Also see `PayghaamLiveActivities.observe`.
+    ///
+    /// Returns `true` when the server accepted the token (or the offline queue
+    /// accepted a retryable failure). `false` when skipped or permanently rejected.
+    @discardableResult
+    public func registerLiveActivityUpdateToken(
+        activityId: String,
+        token: String,
+        attributesType: String?
+    ) async -> Bool {
+        guard canSend, let config else {
+            NSLog(
+                "[Payghaam] Live Activity update token skipped (SDK not initialized) "
+                    + "activityId=\(activityId) — POST not attempted"
+            )
+            notifyUpdateToken(activityId: activityId, ok: false, token: token, error: "not initialized")
+            return false
+        }
+        guard let externalId else {
+            pendingLiveActivityUpdateTokens[activityId] = (token, attributesType)
+            NSLog(
+                "[Payghaam] Live Activity update token buffered (login() not completed yet) "
+                    + "activityId=\(activityId) — will POST after login"
+            )
+            return false
+        }
+        // Was `try?` — a failed POST left Update via REST returning 200 from the
+        // API while delivery failed with `live_activity_no_update_token`, with
+        // nothing in the Xcode console to explain it.
+        do {
+            try await ApiClient.registerLiveActivityToken(
+                config: config,
+                externalId: externalId,
+                activityId: activityId,
+                token: token,
+                attributesType: attributesType
+            )
+            NSLog("[Payghaam] Live Activity update token registered activityId=\(activityId) (\(token.prefix(12))…)")
+            notifyUpdateToken(activityId: activityId, ok: true, token: token, error: nil)
+            return true
+        } catch {
+            NSLog("[Payghaam] Live Activity update token register FAILED activityId=\(activityId): \(error.localizedDescription)")
+            notifyUpdateToken(activityId: activityId, ok: false, token: token, error: error.localizedDescription)
+            return false
+        }
+    }
+
+    private func notifyUpdateToken(activityId: String, ok: Bool, token: String, error: String?) {
+        var info: [String: Any] = [
+            "activityId": activityId,
+            "ok": ok,
+            "tokenPrefix": String(token.prefix(12)),
+        ]
+        if let error { info["error"] = error }
+        postNotificationOnMain(name: .payghaamLiveActivityUpdateToken, userInfo: info)
+    }
+
+    /// SwiftUI / host apps must receive SDK events on the main queue.
+    private func postNotificationOnMain(name: Notification.Name, userInfo: [String: Any]) {
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: name, object: nil, userInfo: userInfo)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: name, object: nil, userInfo: userInfo)
+            }
+        }
     }
 
     /// Persist config for the Notification Service Extension (App Group).
@@ -301,6 +476,7 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
             if let id = data["ek_message_id"] as? String {
                 await reportPushReceipt(messageId: id, event: "delivered", properties: data as? [String: Any])
             }
+            refreshLiveActivitiesOnPushWake()
             // An app that had its own delegate may want different presentation
             // options; defer to it when it has an opinion. `responds(to:)` first,
             // rather than relying on the optional-chained call to no-op safely —
@@ -336,6 +512,7 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
             if let id = data["ek_message_id"] as? String {
                 await reportPushReceipt(messageId: id, event: "opened", properties: data as? [String: Any])
             }
+            refreshLiveActivitiesOnPushWake()
 
             let payload = (data as? [String: Any]) ?? [:]
             if let handler = onNotificationOpened {

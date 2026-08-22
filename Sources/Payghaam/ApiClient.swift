@@ -30,6 +30,11 @@ public enum SubscriptionType: String, Sendable {
     case webPush = "WEB_PUSH"
     case email = "EMAIL"
     case sms = "SMS"
+    /// Live Activity push-to-start token (iOS 17.2+). One per app install and
+    /// shared across every ActivityAttributes type, so it behaves like an
+    /// ordinary device endpoint — unlike the per-activity update tokens, which
+    /// are registered through `registerLiveActivityToken` instead.
+    case iosLiveActivityStart = "IOS_LIVE_ACTIVITY_START"
 }
 
 public struct PayghaamApiError: Error, LocalizedError {
@@ -62,6 +67,27 @@ enum ApiClient {
             "type": type.rawValue,
             "token": token,
         ])
+    }
+
+    /// Report a per-activity Live Activity update token.
+    ///
+    /// Distinct from `addSubscription`: this token addresses one running
+    /// activity rather than the device, and it rotates over that activity's
+    /// life, so it is re-posted rather than registered once.
+    static func registerLiveActivityToken(
+        config: PayghaamConfig,
+        externalId: String,
+        activityId: String,
+        token: String,
+        attributesType: String?
+    ) async throws {
+        var body: [String: Any] = [
+            "externalId": externalId,
+            "activityId": activityId,
+            "token": token,
+        ]
+        if let attributesType { body["attributesType"] = attributesType }
+        try await post(config: config, path: "/live-activities/tokens", body: body)
     }
 
     static func updateTags(config: PayghaamConfig, externalId: String, tags: [String: Any?]) async throws {
