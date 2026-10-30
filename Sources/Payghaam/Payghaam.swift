@@ -26,6 +26,10 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     private var currentToken: String?
     private let sessions = SessionTracker()
     private var foregroundObserver: NSObjectProtocol?
+    private var backgroundObserver: NSObjectProtocol?
+    private var pendingTags: [String: Any?] = [:]
+    private var tagDebounceTask: Task<Void, Never>?
+    private let tagLock = NSLock()
 
     /// Invoked when the user taps a notification, with the full APNs payload —
     /// your custom `data` keys plus Payghaam's own `ek_*` keys.
@@ -81,6 +85,13 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { await self?.onForeground() }
+        }
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.flushTags() }
         }
         Task { await onForeground() }
     }
@@ -202,6 +213,7 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     }
 
     public func logout() {
+        Task { await flushTags() }
         externalId = nil
         ApiClient.identityHash = nil
         UserDefaults.standard.removeObject(forKey: "payghaam_external_id")
@@ -220,7 +232,43 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         guard canSend, let config, let externalId else {
             throw NSError(domain: "Payghaam", code: 1, userInfo: [NSLocalizedDescriptionKey: "Call login() first"])
         }
-        try await ApiClient.updateTags(config: config, externalId: externalId, tags: tags)
+        tagLock.lock()
+        for (k, v) in tags {
+            pendingTags[k] = v
+        }
+        tagDebounceTask?.cancel()
+        tagDebounceTask = Task { [weak self, config, externalId] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, let self else { return }
+            await self.executeFlushTags(config: config, externalId: externalId)
+        }
+        tagLock.unlock()
+    }
+
+    /// Flushes any pending debounced tags immediately.
+    public func flushTags() async {
+        guard let config, let externalId else { return }
+        await executeFlushTags(config: config, externalId: externalId)
+    }
+
+    private func executeFlushTags(config: PayghaamConfig, externalId: String) async {
+        tagLock.lock()
+        tagDebounceTask?.cancel()
+        tagDebounceTask = nil
+        let tags = pendingTags
+        pendingTags.removeAll()
+        tagLock.unlock()
+
+        guard !tags.isEmpty else { return }
+        do {
+            try await ApiClient.updateTags(config: config, externalId: externalId, tags: tags)
+        } catch {
+            OfflineQueue.enqueue(
+                method: "PUT",
+                path: "sdk/tags",
+                body: ["externalId": externalId, "tags": tags]
+            )
+        }
     }
 
     public func requestPushPermission() async -> Bool {
