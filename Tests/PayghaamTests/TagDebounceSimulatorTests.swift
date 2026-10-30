@@ -60,4 +60,28 @@ final class TagDebounceSimulatorTests: XCTestCase {
         
         XCTAssertTrue(Payghaam.shared.isInitialized)
     }
+
+    func testLiveActivityUpdateTokenRegistration() async throws {
+        let config = PayghaamConfig(
+            appId: "cmqy0h7a8000xfcypq66nw18d",
+            apiKey: "ek_client_simulator_test_key_456",
+            baseUrl: "http://127.0.0.1:4000"
+        )
+        
+        try await ApiClient.identify(config: config, externalId: "sim_ios_live_act_user")
+        
+        Payghaam.shared.persistBridgeConfig(
+            apiKey: "ek_client_simulator_test_key_456",
+            baseUrl: "http://127.0.0.1:4000",
+            externalId: "sim_ios_live_act_user"
+        )
+        
+        let accepted = await Payghaam.shared.registerLiveActivityUpdateToken(
+            activityId: "sim_delivery_order_99",
+            token: "apns_live_sim_tok_1234567890abcdef",
+            attributesType: "DeliveryStatusAttributes"
+        )
+        
+        XCTAssertTrue(accepted, "Expected Live Activity token registration to succeed")
+    }
 }
