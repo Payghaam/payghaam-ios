@@ -63,7 +63,8 @@ enum ApiClient {
         type: SubscriptionType,
         token: String
     ) async throws {
-        try await post(config: config, path: "/users/\(externalId)/subscriptions", body: [
+        try await post(config: config, path: "/subscriptions", body: [
+            "externalId": externalId,
             "type": type.rawValue,
             "token": token,
         ])
@@ -91,7 +92,10 @@ enum ApiClient {
     }
 
     static func updateTags(config: PayghaamConfig, externalId: String, tags: [String: Any?]) async throws {
-        try await put(config: config, path: "/users/\(externalId)/tags", body: ["tags": tags])
+        try await put(config: config, path: "/tags", body: [
+            "externalId": externalId,
+            "tags": tags,
+        ])
     }
 
     static func track(
