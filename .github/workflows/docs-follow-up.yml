@@ -66,13 +66,17 @@ jobs:
           fi
 
   ping-mono:
-    if: github.event_name == 'push' && secrets.DOCS_DISPATCH_TOKEN != ''
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Notify payghaam-mono docs watcher
         env:
           GH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
         run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "No DOCS_DISPATCH_TOKEN — weekly poll on payghaam-mono will pick this up."
+            exit 0
+          fi
           gh api repos/Payghaam/payghaam-mono/dispatches --input - <<EOF
           {"event_type":"sdk-docs","client_payload":{"repo":"${GITHUB_REPOSITORY}","sha":"${GITHUB_SHA}","ref":"${GITHUB_REF_NAME}"}}
           EOF
