@@ -143,6 +143,42 @@ enum ApiClient {
         try await post(config: config, path: "/users", body: body)
     }
 
+    static func removeAlias(
+        config: PayghaamConfig,
+        label: String,
+        externalId: String? = nil,
+        anonymousId: String? = nil
+    ) async throws {
+        var body: [String: Any] = ["label": label]
+        if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
+        try await post(config: config, path: "/aliases/remove", body: body)
+    }
+
+    static func optOut(
+        config: PayghaamConfig,
+        type: SubscriptionType,
+        token: String
+    ) async throws {
+        let body: [String: Any] = [
+            "type": type.rawValue,
+            "token": token
+        ]
+        try await post(config: config, path: "/opt-out", body: body)
+    }
+
+    static func optIn(
+        config: PayghaamConfig,
+        type: SubscriptionType,
+        token: String
+    ) async throws {
+        let body: [String: Any] = [
+            "type": type.rawValue,
+            "token": token
+        ]
+        try await post(config: config, path: "/opt-in", body: body)
+    }
+
     static func track(
         config: PayghaamConfig,
         name: String,

@@ -259,6 +259,14 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         return anonymousId
     }
 
+    public func getExternalId() -> String? {
+        return externalId
+    }
+
+    public func getPushToken() -> String? {
+        return currentToken
+    }
+
     public func setLanguage(_ language: String?) async throws {
         self.languageOverride = language
         if let language {
@@ -288,6 +296,22 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
             anonymousId: anonymousId,
             aliases: aliases
         )
+    }
+
+    public func removeAlias(_ label: String) async throws {
+        try await removeAliases([label])
+    }
+
+    public func removeAliases(_ labels: [String]) async throws {
+        guard canSend, let config else { return }
+        for label in labels {
+            try await ApiClient.removeAlias(
+                config: config,
+                label: label,
+                externalId: externalId,
+                anonymousId: anonymousId
+            )
+        }
     }
 
     public func addEmail(_ email: String) async throws {
@@ -347,6 +371,28 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
 
     public func addTag(_ key: String, value: Any) async throws {
         try await addTags([key: value])
+    }
+
+    public func removeTag(_ key: String) async throws {
+        try await removeTags([key])
+    }
+
+    public func removeTags(_ keys: [String]) async throws {
+        var tags: [String: Any?] = [:]
+        for key in keys {
+            tags[key] = NSNull()
+        }
+        try await addTags(tags)
+    }
+
+    public func optOut() async throws {
+        guard canSend, let config, let token = currentToken else { return }
+        try await ApiClient.optOut(config: config, type: .iosPush, token: token)
+    }
+
+    public func optIn() async throws {
+        guard canSend, let config, let token = currentToken else { return }
+        try await ApiClient.optIn(config: config, type: .iosPush, token: token)
     }
 
     public func addTags(_ tags: [String: Any?]) async throws {
@@ -650,6 +696,18 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
 
     public func bridgeAddAliases(_ aliases: [String: String]) async throws {
         try await addAliases(aliases)
+    }
+
+    public func bridgeRemoveAlias(_ label: String) async throws {
+        try await removeAlias(label)
+    }
+
+    public func bridgeOptOut() async throws {
+        try await optOut()
+    }
+
+    public func bridgeOptIn() async throws {
+        try await optIn()
     }
 
     /// Drains anything the offline queue accumulated. Safe to call repeatedly.

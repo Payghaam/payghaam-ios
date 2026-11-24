@@ -41,4 +41,17 @@ final class AnonymousTrackingTests: XCTestCase {
         try await Payghaam.shared.removeSms("+97412345678")
         try await Payghaam.shared.bridgeRemoveSubscription(type: .sms, token: "+97412345678")
     }
+
+    func testRemoveAliasAndTagsAndOptInOut() async throws {
+        XCTAssertEqual(Payghaam.shared.getExternalId(), "bridge_user_1")
+        try await Payghaam.shared.removeAlias("crm_id")
+        try await Payghaam.shared.removeAliases(["crm_id", "loyalty_id"])
+        try await Payghaam.shared.removeTag("tier")
+        try await Payghaam.shared.removeTags(["tier", "score"])
+        try await Payghaam.shared.optOut()
+        try await Payghaam.shared.optIn()
+        try await Payghaam.shared.bridgeRemoveAlias("crm_id")
+        try await Payghaam.shared.bridgeOptOut()
+        try await Payghaam.shared.bridgeOptIn()
+    }
 }
