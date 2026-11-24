@@ -65,9 +65,20 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         return !(config?.requireConsent == true && !consentGiven)
     }
 
+    private var anonymousId: String = ""
+    private var languageOverride: String?
+
     private override init() {
         super.init()
         externalId = UserDefaults.standard.string(forKey: "payghaam_external_id")
+        languageOverride = UserDefaults.standard.string(forKey: "payghaam_language")
+        if let stored = UserDefaults.standard.string(forKey: "payghaam_anonymous_id"), !stored.isEmpty {
+            anonymousId = stored
+        } else {
+            let newId = UUID().uuidString.lowercased()
+            anonymousId = newId
+            UserDefaults.standard.set(newId, forKey: "payghaam_anonymous_id")
+        }
     }
 
     /// Call once at app launch (e.g. AppDelegate / @main App init).
@@ -117,14 +128,20 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func pingDeviceContext(sessionStart: Bool = false) async {
-        guard canSend, let config, externalId != nil else { return }
+        guard canSend, let config else { return }
         do {
             let countSession = sessionStart && sessions.noteForeground()
             let permission = await pushPermissionLabel()
             try await ApiClient.identify(
                 config: config,
                 externalId: externalId,
-                deviceContext: DeviceContext.collect(sessionStart: countSession, pushPermission: permission)
+                anonymousId: anonymousId,
+                language: languageOverride,
+                deviceContext: DeviceContext.collect(
+                    sessionStart: countSession,
+                    pushPermission: permission,
+                    languageOverride: languageOverride
+                )
             )
         } catch {
             // Best-effort device profile sync — but log so a bad API key /
@@ -208,7 +225,23 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         self.externalId = externalId
         ApiClient.identityHash = identityHash
         UserDefaults.standard.set(externalId, forKey: "payghaam_external_id")
-        guard canSend else { return }
+        guard canSend, let config else { return }
+        do {
+            let permission = await pushPermissionLabel()
+            try await ApiClient.identify(
+                config: config,
+                externalId: externalId,
+                anonymousId: anonymousId,
+                language: languageOverride,
+                deviceContext: DeviceContext.collect(
+                    sessionStart: false,
+                    pushPermission: permission,
+                    languageOverride: languageOverride
+                )
+            )
+        } catch {
+            NSLog("[Payghaam] login identify link failed: \(error.localizedDescription)")
+        }
         Task { await runPostLoginTasks() }
     }
 
@@ -217,11 +250,77 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         externalId = nil
         ApiClient.identityHash = nil
         UserDefaults.standard.removeObject(forKey: "payghaam_external_id")
+        let newId = UUID().uuidString.lowercased()
+        anonymousId = newId
+        UserDefaults.standard.set(newId, forKey: "payghaam_anonymous_id")
+    }
+
+    public func getAnonymousId() -> String {
+        return anonymousId
+    }
+
+    public func setLanguage(_ language: String?) async throws {
+        self.languageOverride = language
+        if let language {
+            UserDefaults.standard.set(language, forKey: "payghaam_language")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "payghaam_language")
+        }
+        guard canSend, let config else { return }
+        try await ApiClient.identify(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            language: language,
+            deviceContext: DeviceContext.collect(languageOverride: language)
+        )
+    }
+
+    public func addAlias(label: String, value: String) async throws {
+        try await addAliases([label: value])
+    }
+
+    public func addAliases(_ aliases: [String: String]) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.addAliases(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            aliases: aliases
+        )
+    }
+
+    public func addEmail(_ email: String) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.addSubscription(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            type: .email,
+            token: email
+        )
+    }
+
+    public func addSms(_ phone: String) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.addSubscription(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            type: .sms,
+            token: phone
+        )
     }
 
     public func trackEvent(_ name: String, properties: [String: Any]? = nil) async throws {
         guard canSend, let config else { return }
-        try await ApiClient.track(config: config, name: name, externalId: externalId, properties: properties)
+        try await ApiClient.track(
+            config: config,
+            name: name,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            properties: properties
+        )
     }
 
     public func addTag(_ key: String, value: Any) async throws {
@@ -229,29 +328,27 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     }
 
     public func addTags(_ tags: [String: Any?]) async throws {
-        guard canSend, let config, let externalId else {
-            throw NSError(domain: "Payghaam", code: 1, userInfo: [NSLocalizedDescriptionKey: "Call login() first"])
-        }
+        guard canSend, let config else { return }
         tagLock.lock()
         for (k, v) in tags {
             pendingTags[k] = v
         }
         tagDebounceTask?.cancel()
-        tagDebounceTask = Task { [weak self, config, externalId] in
+        tagDebounceTask = Task { [weak self, config, externalId, anonymousId] in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled, let self else { return }
-            await self.executeFlushTags(config: config, externalId: externalId)
+            await self.executeFlushTags(config: config, externalId: externalId, anonymousId: anonymousId)
         }
         tagLock.unlock()
     }
 
     /// Flushes any pending debounced tags immediately.
     public func flushTags() async {
-        guard let config, let externalId else { return }
-        await executeFlushTags(config: config, externalId: externalId)
+        guard let config else { return }
+        await executeFlushTags(config: config, externalId: externalId, anonymousId: anonymousId)
     }
 
-    private func executeFlushTags(config: PayghaamConfig, externalId: String) async {
+    private func executeFlushTags(config: PayghaamConfig, externalId: String?, anonymousId: String) async {
         tagLock.lock()
         tagDebounceTask?.cancel()
         tagDebounceTask = nil
@@ -261,12 +358,19 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
 
         guard !tags.isEmpty else { return }
         do {
-            try await ApiClient.updateTags(config: config, externalId: externalId, tags: tags)
+            try await ApiClient.updateTags(
+                config: config,
+                externalId: externalId,
+                anonymousId: anonymousId,
+                tags: tags
+            )
         } catch {
+            var body: [String: Any] = ["tags": tags, "anonymousId": anonymousId]
+            if let externalId { body["externalId"] = externalId }
             OfflineQueue.enqueue(
                 method: "PUT",
                 path: "sdk/tags",
-                body: ["externalId": externalId, "tags": tags]
+                body: body
             )
         }
     }
@@ -293,13 +397,10 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
 
     public func registerPushToken(_ token: String) async throws {
         guard canSend, let config else { return }
-        guard let externalId else {
-            pendingPushToken = token
-            return
-        }
         try await ApiClient.addSubscription(
             config: config,
             externalId: externalId,
+            anonymousId: anonymousId,
             type: .iosPush,
             token: token
         )
@@ -311,22 +412,14 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     /// Push-to-start token (iOS 17.2+). Device-level, so it is registered as an
     /// ordinary subscription. Called by `PayghaamLiveActivities.observe`.
     ///
-    /// Buffered like the push token when it arrives before `login()`: the system
-    /// hands this over at app launch, which is routinely before the app knows
-    /// who the user is.
+    /// Device-level subscription that can be registered even before login.
     public func registerLiveActivityStartToken(_ token: String) async {
         guard canSend, let config else { return }
-        guard let externalId else {
-            pendingLiveActivityStartToken = token
-            return
-        }
-        // Was `try?` — a failed subscription POST left Start via REST doing
-        // nothing with no log, while Update after a local start still worked
-        // (that path uses the per-activity update token).
         do {
             try await ApiClient.addSubscription(
                 config: config,
                 externalId: externalId,
+                anonymousId: anonymousId,
                 type: .iosLiveActivityStart,
                 token: token
             )
@@ -348,10 +441,6 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     /// Per-activity update token. Re-posted whenever the system rotates it, so
     /// this is expected to be called many times for one activity.
     ///
-    /// Buffered briefly when it arrives before `login()` (push-to-start can race
-    /// identify). After login, pending entries are flushed from
-    /// `runPostLoginTasks`. Also see `PayghaamLiveActivities.observe`.
-    ///
     /// Returns `true` when the server accepted the token (or the offline queue
     /// accepted a retryable failure). `false` when skipped or permanently rejected.
     @discardableResult
@@ -368,21 +457,11 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
             notifyUpdateToken(activityId: activityId, ok: false, token: token, error: "not initialized")
             return false
         }
-        guard let externalId else {
-            pendingLiveActivityUpdateTokens[activityId] = (token, attributesType)
-            NSLog(
-                "[Payghaam] Live Activity update token buffered (login() not completed yet) "
-                    + "activityId=\(activityId) — will POST after login"
-            )
-            return false
-        }
-        // Was `try?` — a failed POST left Update via REST returning 200 from the
-        // API while delivery failed with `live_activity_no_update_token`, with
-        // nothing in the Xcode console to explain it.
         do {
             try await ApiClient.registerLiveActivityToken(
                 config: config,
                 externalId: externalId,
+                anonymousId: anonymousId,
                 activityId: activityId,
                 token: token,
                 attributesType: attributesType
@@ -460,7 +539,14 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     /// `initialize()` (`externalId` nil) and again at `login()` (`externalId` set).
     /// Deliberately separate from `shareConfig(appGroup:...)` above — that method's
     /// job (NSE App-Group `UserDefaults`) is unrelated.
-    public func persistBridgeConfig(apiKey: String, baseUrl: String, externalId: String? = nil, identityHash: String? = nil) {
+    public func persistBridgeConfig(
+        apiKey: String,
+        baseUrl: String,
+        externalId: String? = nil,
+        identityHash: String? = nil,
+        anonymousId: String? = nil,
+        language: String? = nil
+    ) {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase = baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         // Rebind whenever key/baseUrl actually changed, not just on first call —
@@ -479,6 +565,14 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         if let identityHash {
             ApiClient.identityHash = identityHash
         }
+        if let anonymousId, !anonymousId.isEmpty {
+            self.anonymousId = anonymousId
+            UserDefaults.standard.set(anonymousId, forKey: "payghaam_anonymous_id")
+        }
+        if let language {
+            self.languageOverride = language
+            UserDefaults.standard.set(language, forKey: "payghaam_language")
+        }
     }
 
     /// Clears the identity `persistBridgeConfig` set — call from a wrapper's
@@ -488,18 +582,41 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         externalId = nil
         ApiClient.identityHash = nil
         UserDefaults.standard.removeObject(forKey: "payghaam_external_id")
+        let newId = UUID().uuidString.lowercased()
+        anonymousId = newId
+        UserDefaults.standard.set(newId, forKey: "payghaam_anonymous_id")
     }
 
     /// Raw identify call — the wrapper's own device-context snapshot goes in `deviceContext`.
     public func bridgeIdentify(deviceContext: [String: Any]? = nil) async throws {
         guard canSend, let config else { return }
-        try await ApiClient.identify(config: config, externalId: externalId, deviceContext: deviceContext)
+        try await ApiClient.identify(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            language: languageOverride,
+            deviceContext: deviceContext
+        )
     }
 
     /// Generic channel subscription (push token, email, SMS) for the current user.
     public func bridgeAddSubscription(type: SubscriptionType, token: String) async throws {
-        guard canSend, let config, let externalId else { return }
-        try await ApiClient.addSubscription(config: config, externalId: externalId, type: type, token: token)
+        guard canSend, let config else { return }
+        try await ApiClient.addSubscription(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            type: type,
+            token: token
+        )
+    }
+
+    public func bridgeSetLanguage(_ language: String?) async throws {
+        try await setLanguage(language)
+    }
+
+    public func bridgeAddAliases(_ aliases: [String: String]) async throws {
+        try await addAliases(aliases)
     }
 
     /// Drains anything the offline queue accumulated. Safe to call repeatedly.

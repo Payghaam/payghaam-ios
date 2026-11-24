@@ -7,12 +7,13 @@ import UIKit
 public enum DeviceContext {
     static let sdkVersion = "0.1.0"
 
-    public static func collect(sessionStart: Bool = false, pushPermission: String? = nil) -> [String: Any] {
+    public static func collect(sessionStart: Bool = false, pushPermission: String? = nil, languageOverride: String? = nil) -> [String: Any] {
         let locale = Locale.current
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        let lang = languageOverride ?? locale.languageCode ?? ""
         var body: [String: Any] = [
             "country": locale.regionCode ?? "",
-            "language": locale.languageCode ?? "",
+            "language": lang,
             "timezone": TimeZone.current.identifier,
             "os": "iOS",
             "osVersion": UIDevice.current.systemVersion,

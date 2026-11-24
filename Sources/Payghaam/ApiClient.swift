@@ -48,26 +48,35 @@ enum ApiClient {
 
     static func identify(
         config: PayghaamConfig,
-        externalId: String?,
+        externalId: String? = nil,
+        anonymousId: String? = nil,
+        language: String? = nil,
+        aliases: [[String: String]]? = nil,
         deviceContext: [String: Any]? = nil
     ) async throws {
         var body: [String: Any] = [:]
         if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
+        if let language { body["language"] = language }
+        if let aliases { body["aliases"] = aliases }
         deviceContext?.forEach { body[$0.key] = $0.value }
         try await post(config: config, path: "/users", body: body)
     }
 
     static func addSubscription(
         config: PayghaamConfig,
-        externalId: String,
+        externalId: String? = nil,
+        anonymousId: String? = nil,
         type: SubscriptionType,
         token: String
     ) async throws {
-        try await post(config: config, path: "/subscriptions", body: [
-            "externalId": externalId,
+        var body: [String: Any] = [
             "type": type.rawValue,
             "token": token,
-        ])
+        ]
+        if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
+        try await post(config: config, path: "/subscriptions", body: body)
     }
 
     /// Report a per-activity Live Activity update token.
@@ -77,35 +86,57 @@ enum ApiClient {
     /// life, so it is re-posted rather than registered once.
     static func registerLiveActivityToken(
         config: PayghaamConfig,
-        externalId: String,
+        externalId: String? = nil,
+        anonymousId: String? = nil,
         activityId: String,
         token: String,
         attributesType: String?
     ) async throws {
         var body: [String: Any] = [
-            "externalId": externalId,
             "activityId": activityId,
             "token": token,
         ]
+        if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
         if let attributesType { body["attributesType"] = attributesType }
         try await post(config: config, path: "/live-activities/tokens", body: body)
     }
 
-    static func updateTags(config: PayghaamConfig, externalId: String, tags: [String: Any?]) async throws {
-        try await put(config: config, path: "/tags", body: [
-            "externalId": externalId,
-            "tags": tags,
-        ])
+    static func updateTags(
+        config: PayghaamConfig,
+        externalId: String? = nil,
+        anonymousId: String? = nil,
+        tags: [String: Any?]
+    ) async throws {
+        var body: [String: Any] = ["tags": tags]
+        if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
+        try await put(config: config, path: "/tags", body: body)
+    }
+
+    static func addAliases(
+        config: PayghaamConfig,
+        externalId: String? = nil,
+        anonymousId: String? = nil,
+        aliases: [String: String]
+    ) async throws {
+        let list = aliases.map { ["label": $0.key, "value": $0.value] }
+        var body: [String: Any] = ["aliases": list]
+        if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
+        try await post(config: config, path: "/users", body: body)
     }
 
     static func track(
         config: PayghaamConfig,
         name: String,
-        externalId: String?,
-        properties: [String: Any]?
+        externalId: String? = nil,
+        anonymousId: String? = nil,
+        properties: [String: Any]? = nil
     ) async throws {
         var body: [String: Any] = ["name": name]
         if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
         if let properties { body["properties"] = properties }
         try await post(config: config, path: "/events", body: body)
     }
