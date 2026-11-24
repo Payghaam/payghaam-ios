@@ -312,6 +312,28 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
         )
     }
 
+    public func removeEmail(_ email: String) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.removeSubscription(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            type: .email,
+            token: email
+        )
+    }
+
+    public func removeSms(_ phone: String) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.removeSubscription(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            type: .sms,
+            token: phone
+        )
+    }
+
     public func trackEvent(_ name: String, properties: [String: Any]? = nil) async throws {
         guard canSend, let config else { return }
         try await ApiClient.track(
@@ -603,6 +625,17 @@ public final class Payghaam: NSObject, UNUserNotificationCenterDelegate {
     public func bridgeAddSubscription(type: SubscriptionType, token: String) async throws {
         guard canSend, let config else { return }
         try await ApiClient.addSubscription(
+            config: config,
+            externalId: externalId,
+            anonymousId: anonymousId,
+            type: type,
+            token: token
+        )
+    }
+
+    public func bridgeRemoveSubscription(type: SubscriptionType, token: String) async throws {
+        guard canSend, let config else { return }
+        try await ApiClient.removeSubscription(
             config: config,
             externalId: externalId,
             anonymousId: anonymousId,

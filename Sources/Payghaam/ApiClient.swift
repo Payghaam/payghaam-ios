@@ -79,6 +79,22 @@ enum ApiClient {
         try await post(config: config, path: "/subscriptions", body: body)
     }
 
+    static func removeSubscription(
+        config: PayghaamConfig,
+        externalId: String? = nil,
+        anonymousId: String? = nil,
+        type: SubscriptionType,
+        token: String
+    ) async throws {
+        var body: [String: Any] = [
+            "type": type.rawValue,
+            "token": token,
+        ]
+        if let externalId { body["externalId"] = externalId }
+        if let anonymousId { body["anonymousId"] = anonymousId }
+        try await post(config: config, path: "/subscriptions/remove", body: body)
+    }
+
     /// Report a per-activity Live Activity update token.
     ///
     /// Distinct from `addSubscription`: this token addresses one running

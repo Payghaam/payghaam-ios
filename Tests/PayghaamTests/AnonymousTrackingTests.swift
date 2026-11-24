@@ -34,4 +34,11 @@ final class AnonymousTrackingTests: XCTestCase {
         XCTAssertEqual(Payghaam.shared.getAnonymousId(), "custom_anon_id_123")
         XCTAssertEqual(UserDefaults.standard.string(forKey: "payghaam_language"), "ar")
     }
+
+    func testRemoveEmailAndSms() async throws {
+        // Method availability check
+        try await Payghaam.shared.removeEmail("user@example.com")
+        try await Payghaam.shared.removeSms("+97412345678")
+        try await Payghaam.shared.bridgeRemoveSubscription(type: .sms, token: "+97412345678")
+    }
 }
