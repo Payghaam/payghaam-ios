@@ -6,7 +6,9 @@ on:
 
 jobs:
   publish:
-    runs-on: macos-14
+    # macos-14 was retired on 2 Nov 2026. The label now cancels the job
+    # before a runner starts, which is why 0.1.5–0.1.7 never reached trunk.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: pod lib lint Payghaam.podspec --allow-warnings
